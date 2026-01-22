@@ -138,7 +138,7 @@ class Music(commands.Cog):
         songs = get_local_songs()
         
         if not songs:
-            raise Exception(f'No audio files found in {MUSIC_FOLDER}')
+            raise Exception('No audio files found')
         
         if song_number < 1 or song_number > len(songs):
             raise Exception(f'Invalid song number. Choose 1-{len(songs)}')
@@ -147,7 +147,7 @@ class Music(commands.Cog):
         
         return {
             'url': str(song_path),
-            'title': song_path.stem,  # filename without extension
+            'title': f'Song #{song_number}',  # Just show the number
             'duration': 0,
             'thumbnail': None,
             'webpage_url': None,
@@ -344,7 +344,7 @@ class Music(commands.Cog):
             if query.isdigit():
                 song_number = int(query)
                 song = self.get_local_song_info(song_number)
-                await ctx.send(f'📁 Playing local: **{song["title"]}**')
+                await ctx.send(f'📁 Playing **#{song_number}**')
             else:
                 await ctx.send(f'🔍 Searching for: **{query}**')
                 song = await self.extract_info(query)
@@ -361,29 +361,15 @@ class Music(commands.Cog):
         else:
             await ctx.send(f'📝 Added to queue: **{song["title"]}**')
     
-    @commands.hybrid_command(name='songs', description='List available local songs', aliases=['list', 'local'])
+    @commands.hybrid_command(name='songs', description='Show number of available local songs', aliases=['list', 'local'])
     async def songs(self, ctx: commands.Context):
-        """List all available local songs from the music folder."""
+        """Show the number of available local songs."""
         songs = get_local_songs()
         
         if not songs:
-            return await ctx.send(f'📭 No audio files found in `{MUSIC_FOLDER}`')
+            return await ctx.send('📭 No audio files found')
         
-        embed = discord.Embed(
-            title='📁 Local Songs',
-            description=f'Use `/play <number>` to play a song',
-            color=discord.Color.blue()
-        )
-        
-        # Show songs in chunks
-        song_list = '\n'.join(f'**{i+1}.** {song.stem}' for i, song in enumerate(songs[:25]))
-        if len(songs) > 25:
-            song_list += f'\n... and {len(songs) - 25} more'
-        
-        embed.add_field(name='Available Songs', value=song_list, inline=False)
-        embed.set_footer(text=f'Folder: {MUSIC_FOLDER}')
-        
-        await ctx.send(embed=embed)
+        await ctx.send(f'📁 **{len(songs)}** songs available. Use `/play 1` to `/play {len(songs)}` to play.')
     
     @commands.hybrid_command(name='pause', description='Pause the current song')
     async def pause(self, ctx: commands.Context):
