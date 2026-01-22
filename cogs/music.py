@@ -3,8 +3,14 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import yt_dlp
+import os
+from pathlib import Path
 from collections import deque
 
+from config import MUSIC_FOLDER
+
+# Supported audio file extensions
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.aac', '.wma'}
 
 # yt-dlp options for audio-only extraction
 YDL_OPTIONS = {
@@ -22,6 +28,11 @@ FFMPEG_OPTIONS = {
     'options': '-vn',  # -vn means no video
 }
 
+# FFmpeg options for local files (no reconnect needed)
+FFMPEG_LOCAL_OPTIONS = {
+    'options': '-vn',
+}
+
 # Control emojis
 EMOJI_PAUSE = '⏸️'
 EMOJI_RESUME = '▶️'
@@ -29,6 +40,21 @@ EMOJI_SKIP = '⏭️'
 EMOJI_STOP = '⏹️'
 EMOJI_QUEUE = '📜'
 CONTROL_EMOJIS = [EMOJI_PAUSE, EMOJI_RESUME, EMOJI_SKIP, EMOJI_STOP, EMOJI_QUEUE]
+
+
+def get_local_songs():
+    """Get list of audio files from the music folder."""
+    songs = []
+    music_path = Path(MUSIC_FOLDER)
+    
+    if not music_path.exists():
+        return songs
+    
+    for file in sorted(music_path.iterdir()):
+        if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS:
+            songs.append(file)
+    
+    return songs
 
 
 class MusicPlayer:
@@ -102,9 +128,31 @@ class Music(commands.Cog):
                     'duration': info.get('duration', 0),
                     'thumbnail': info.get('thumbnail'),
                     'webpage_url': info.get('webpage_url', query),
+                    'is_local': False,
                 }
             except Exception as e:
                 raise Exception(f'Failed to extract audio: {str(e)}')
+    
+    def get_local_song_info(self, song_number: int):
+        """Get local song info by number (1-indexed)."""
+        songs = get_local_songs()
+        
+        if not songs:
+            raise Exception(f'No audio files found in {MUSIC_FOLDER}')
+        
+        if song_number < 1 or song_number > len(songs):
+            raise Exception(f'Invalid song number. Choose 1-{len(songs)}')
+        
+        song_path = songs[song_number - 1]
+        
+        return {
+            'url': str(song_path),
+            'title': song_path.stem,  # filename without extension
+            'duration': 0,
+            'thumbnail': None,
+            'webpage_url': None,
+            'is_local': True,
+        }
     
     async def send_now_playing(self, ctx, song):
         """Send a now playing message with reaction controls."""
@@ -119,9 +167,12 @@ class Music(commands.Cog):
         if song.get('thumbnail'):
             embed.set_thumbnail(url=song['thumbnail'])
         
-        if song.get('duration'):
+        if song.get('duration') and song['duration'] > 0:
             minutes, seconds = divmod(song['duration'], 60)
             embed.add_field(name='Duration', value=f'{minutes}:{seconds:02d}')
+        
+        if song.get('is_local'):
+            embed.add_field(name='Source', value='📁 Local File', inline=True)
         
         # Add control instructions
         embed.set_footer(text='⏸️ Pause | ▶️ Resume | ⏭️ Skip | ⏹️ Stop | 📜 Queue')
@@ -149,7 +200,11 @@ class Music(commands.Cog):
         if voice_client is None or not voice_client.is_connected():
             return
         
-        source = discord.FFmpegPCMAudio(song['url'], **FFMPEG_OPTIONS)
+        # Choose FFmpeg options based on source
+        if song.get('is_local'):
+            source = discord.FFmpegPCMAudio(song['url'], **FFMPEG_LOCAL_OPTIONS)
+        else:
+            source = discord.FFmpegPCMAudio(song['url'], **FFMPEG_OPTIONS)
         
         def after_playing(error):
             if error:
@@ -268,25 +323,31 @@ class Music(commands.Cog):
         await ctx.guild.voice_client.disconnect()
         await ctx.send('👋 Disconnected from voice channel')
     
-    @commands.hybrid_command(name='play', description='Play audio from YouTube (URL or search)', aliases=['p'])
-    @app_commands.describe(query='YouTube URL or search text (e.g., "never gonna give you up")')
+    @commands.hybrid_command(name='play', description='Play audio (number for local, text for YouTube)', aliases=['p'])
+    @app_commands.describe(query='Song number (1-n) for local files, or YouTube URL/search text')
     async def play(self, ctx: commands.Context, *, query: str):
-        """Play audio from a YouTube URL or search query.
+        """Play audio from local folder or YouTube.
         
         Examples:
+        - !play 1          (plays first local song)
+        - !play 5          (plays fifth local song)
         - !play https://youtube.com/watch?v=...
         - !play never gonna give you up
-        - /play despacito
         """
         # Auto-join if not in voice channel
         if ctx.guild.voice_client is None:
             if not await self.connect_to_voice(ctx):
                 return
         
-        await ctx.send(f'🔍 Searching for: **{query}**')
-        
         try:
-            song = await self.extract_info(query)
+            # Check if query is a number (local song)
+            if query.isdigit():
+                song_number = int(query)
+                song = self.get_local_song_info(song_number)
+                await ctx.send(f'📁 Playing local: **{song["title"]}**')
+            else:
+                await ctx.send(f'🔍 Searching for: **{query}**')
+                song = await self.extract_info(query)
         except Exception as e:
             return await ctx.send(f'❌ {str(e)}')
         
@@ -299,6 +360,30 @@ class Music(commands.Cog):
             await self.play_next(ctx)
         else:
             await ctx.send(f'📝 Added to queue: **{song["title"]}**')
+    
+    @commands.hybrid_command(name='songs', description='List available local songs', aliases=['list', 'local'])
+    async def songs(self, ctx: commands.Context):
+        """List all available local songs from the music folder."""
+        songs = get_local_songs()
+        
+        if not songs:
+            return await ctx.send(f'📭 No audio files found in `{MUSIC_FOLDER}`')
+        
+        embed = discord.Embed(
+            title='📁 Local Songs',
+            description=f'Use `/play <number>` to play a song',
+            color=discord.Color.blue()
+        )
+        
+        # Show songs in chunks
+        song_list = '\n'.join(f'**{i+1}.** {song.stem}' for i, song in enumerate(songs[:25]))
+        if len(songs) > 25:
+            song_list += f'\n... and {len(songs) - 25} more'
+        
+        embed.add_field(name='Available Songs', value=song_list, inline=False)
+        embed.set_footer(text=f'Folder: {MUSIC_FOLDER}')
+        
+        await ctx.send(embed=embed)
     
     @commands.hybrid_command(name='pause', description='Pause the current song')
     async def pause(self, ctx: commands.Context):
@@ -353,15 +438,16 @@ class Music(commands.Cog):
         embed = discord.Embed(title='🎵 Music Queue', color=discord.Color.blurple())
         
         if player.current:
+            source = '📁' if player.current.get('is_local') else '🌐'
             embed.add_field(
                 name='Now Playing',
-                value=f'**{player.current["title"]}**',
+                value=f'{source} **{player.current["title"]}**',
                 inline=False
             )
         
         if player.queue:
             queue_list = '\n'.join(
-                f'{i+1}. {song["title"]}'
+                f'{i+1}. {"📁" if song.get("is_local") else "🌐"} {song["title"]}'
                 for i, song in enumerate(list(player.queue)[:10])
             )
             remaining = len(player.queue) - 10
