@@ -1,0 +1,15 @@
+[Unit]
+Description=Discord Music Bot
+After=network.target
+
+[Service]
+Type=simple
+User=jirka
+WorkingDirectory=/home/jirka/programy/Muslop
+ExecStart=/home/jirka/programy/Muslop/venv/bin/python /home/jirka/programy/Muslop/bot.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/jirka/programy/Muslop/.env
+
+[Install]
+WantedBy=multi-user.target
