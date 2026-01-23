@@ -39,7 +39,8 @@ EMOJI_RESUME = '▶️'
 EMOJI_SKIP = '⏭️'
 EMOJI_STOP = '⏹️'
 EMOJI_QUEUE = '📜'
-CONTROL_EMOJIS = [EMOJI_PAUSE, EMOJI_RESUME, EMOJI_SKIP, EMOJI_STOP, EMOJI_QUEUE]
+EMOJI_NINJA = '🥷'  # Plays song #2
+CONTROL_EMOJIS = [EMOJI_PAUSE, EMOJI_RESUME, EMOJI_SKIP, EMOJI_STOP, EMOJI_QUEUE, EMOJI_NINJA]
 
 
 def get_local_songs():
@@ -175,7 +176,7 @@ class Music(commands.Cog):
             embed.add_field(name='Source', value='📁 Local File', inline=True)
         
         # Add control instructions
-        embed.set_footer(text='⏸️ Pause | ▶️ Resume | ⏭️ Skip | ⏹️ Stop | 📜 Queue')
+        embed.set_footer(text='⏸️ Pause | ▶️ Resume | ⏭️ Skip | ⏹️ Stop | 📜 Queue | 🥷 Play #2')
         
         # Send message and add reactions
         msg = await ctx.channel.send(embed=embed)
@@ -303,6 +304,26 @@ class Music(commands.Cog):
                         queue_list += f'\n... and {len(player.queue) - 10} more'
                     embed.add_field(name='Up Next', value=queue_list, inline=False)
                 await reaction.message.channel.send(embed=embed, delete_after=15)
+        
+        elif emoji == EMOJI_NINJA:
+            # Play song #2 from local folder
+            try:
+                song = self.get_local_song_info(2)
+                player.add(song)
+                
+                if voice_client and not voice_client.is_playing() and not voice_client.is_paused():
+                    await reaction.message.channel.send('🥷 Playing **#2**', delete_after=3)
+                    next_song = player.next()
+                    if next_song:
+                        if next_song.get('is_local'):
+                            source = discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_LOCAL_OPTIONS)
+                        else:
+                            source = discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS)
+                        voice_client.play(source)
+                else:
+                    await reaction.message.channel.send('🥷 Added **#2** to queue', delete_after=3)
+            except Exception as e:
+                await reaction.message.channel.send(f'❌ {str(e)}', delete_after=5)
     
     @commands.hybrid_command(name='join', description='Join your voice channel')
     async def join(self, ctx: commands.Context):
