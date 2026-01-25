@@ -218,13 +218,20 @@ class Music(commands.Cog):
         # Send now playing with controls
         await self.send_now_playing(ctx, song)
     
-    async def connect_to_voice(self, ctx) -> bool:
-        """Try to connect to voice channel with error handling."""
-        if ctx.author.voice is None:
-            await ctx.send('❌ You must be in a voice channel!')
+    async def connect_to_voice(self, ctx, member=None) -> bool:
+        """Try to connect to voice channel with error handling.
+        
+        Works with both commands.Context and discord.Message (for reactions).
+        """
+        # Use provided member (for reactions) or ctx.author (for commands)
+        user = member or getattr(ctx, 'author', None)
+        
+        if user is None or user.voice is None:
+            send_func = ctx.send if hasattr(ctx, 'send') else ctx.channel.send
+            await send_func('❌ You must be in a voice channel!')
             return False
         
-        channel = ctx.author.voice.channel
+        channel = user.voice.channel
         
         try:
             if ctx.guild.voice_client is not None:
@@ -233,13 +240,15 @@ class Music(commands.Cog):
                 await channel.connect(timeout=10.0)
             return True
         except asyncio.TimeoutError:
-            await ctx.send(
+            send_func = ctx.send if hasattr(ctx, 'send') else ctx.channel.send
+            await send_func(
                 '❌ Could not connect to voice channel. '
                 'Please check that I have permission to **Connect** and **Speak** in your voice channel.'
             )
             return False
         except discord.ClientException as e:
-            await ctx.send(f'❌ Connection error: {str(e)}')
+            send_func = ctx.send if hasattr(ctx, 'send') else ctx.channel.send
+            await send_func(f'❌ Connection error: {str(e)}')
             return False
     
     @commands.Cog.listener()
@@ -278,6 +287,16 @@ class Music(commands.Cog):
             if voice_client and voice_client.is_paused():
                 voice_client.resume()
                 await reaction.message.channel.send('▶️ Resumed', delete_after=3)
+            elif voice_client is None or not voice_client.is_connected():
+                # Bot is not in channel, join and play current
+                if await self.connect_to_voice(reaction.message, user):
+                    if player.current:
+                        await self.play_next(reaction.message)
+                        await reaction.message.channel.send('▶️ Joining and resuming', delete_after=3)
+                    else:
+                        await reaction.message.channel.send('❌ Nothing to resume!', delete_after=3)
+            else:
+                await reaction.message.channel.send('❌ Nothing is paused!', delete_after=3)
         
         elif emoji == EMOJI_SKIP:
             if voice_client and voice_client.is_playing():
@@ -308,18 +327,19 @@ class Music(commands.Cog):
         elif emoji == EMOJI_NINJA:
             # Play song #2 from local folder
             try:
+                # Ensure joined first
+                if voice_client is None or not voice_client.is_connected():
+                    if not await self.connect_to_voice(reaction.message, user):
+                        return
+                    # Refresh voice_client after connecting
+                    voice_client = guild.voice_client
+
                 song = self.get_local_song_info(2)
                 player.add(song)
                 
                 if voice_client and not voice_client.is_playing() and not voice_client.is_paused():
                     await reaction.message.channel.send('🥷 Playing **#2**', delete_after=3)
-                    next_song = player.next()
-                    if next_song:
-                        if next_song.get('is_local'):
-                            source = discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_LOCAL_OPTIONS)
-                        else:
-                            source = discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS)
-                        voice_client.play(source)
+                    await self.play_next(reaction.message)
                 else:
                     await reaction.message.channel.send('🥷 Added **#2** to queue', delete_after=3)
             except Exception as e:
@@ -406,11 +426,21 @@ class Music(commands.Cog):
     async def resume(self, ctx: commands.Context):
         """Resume the paused song."""
         voice_client = ctx.guild.voice_client
-        if voice_client is None or not voice_client.is_paused():
-            return await ctx.send('❌ Nothing is paused!')
         
-        voice_client.resume()
-        await ctx.send('▶️ Resumed')
+        if voice_client and voice_client.is_paused():
+            voice_client.resume()
+            await ctx.send('▶️ Resumed')
+        elif voice_client is None or not voice_client.is_connected():
+            # Bot is not in channel, join and play current
+            if await self.connect_to_voice(ctx):
+                player = self.get_player(ctx.guild.id)
+                if player.current:
+                    await self.play_next(ctx)
+                    await ctx.send('▶️ Joining and resuming')
+                else:
+                    await ctx.send('❌ Nothing to resume!')
+        else:
+            await ctx.send('❌ Nothing is paused!')
     
     @commands.hybrid_command(name='stop', description='Stop playback and clear queue')
     async def stop(self, ctx: commands.Context):
